@@ -1380,7 +1380,7 @@ namespace mad {
 
   } // namespace file
 
-   // Advanced MMIO policies: bus-width enforcement + alignment expectations
+   // MMIO policies: bus-width enforcement + alignment expectations
    //
   // The original mad::reg module provides a volatile view over a packet layout,
   // with opportunistic typed volatile loads/stores for byte-aligned 8/16/32/64
