@@ -1395,12 +1395,6 @@ namespace mad {
   //     unaligned access may fault. Some memory maps also require that the
   //     *base address* is aligned to the bus width for correct decode.
   //
-  // This add-on keeps the existing reg_view_base intact and adds a separate,
-  // *policy-configurable* register view:
-  //
-  //   - mad::reg::xview / mad::reg::xcview
-  //   - mad::reg::make_xview / mad::reg::make_xcview
-  //
   // Features:
   //   1) Read/write width capability masks (allowed transaction sizes).
   //   2) Width selection policies:
