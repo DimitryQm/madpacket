@@ -83,58 +83,6 @@ bit 7 bit 0byte[1] bits: 15 14 13 12 11 10 9 8
 | |
 bit 15 bit 8
 
-Plain text
-ANTLR4
-Bash
-C
-C#
-CSS
-CoffeeScript
-CMake
-Dart
-Django
-Docker
-EJS
-Erlang
-Git
-Go
-GraphQL
-Groovy
-HTML
-Java
-JavaScript
-JSON
-JSX
-Kotlin
-LaTeX
-Less
-Lua
-Makefile
-Markdown
-MATLAB
-Markup
-Objective-C
-Perl
-PHP
-PowerShell
-.properties
-Protocol Buffers
-Python
-R
-Ruby
-Sass (Sass)
-Sass (Scss)
-Scheme
-SQL
-Shell
-Swift
-SVG
-TSX
-TypeScript
-WebAssembly
-YAML
-XML
-
 When a bitfield spans bytes, the lower-addressed byte contains the lower-numbered bits of the field, and the higher-addressed byte contains the higher-numbered bits of the field.
 
 
