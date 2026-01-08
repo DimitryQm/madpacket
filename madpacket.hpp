@@ -517,7 +517,14 @@ static consteval void validate_one() {
         "non-native-endian integer fields must be 8/16/32/64 bits");
     }
   }
+  
+  if constexpr (F::kind == field_kind::subpacket) {
+    static_assert((F::packet::total_bits % 8u) == 0,
+      "subpacket fields require SubPacket::total_bits % 8 == 0 (whole-byte size)");
+  }
 }
+
+
 
 static consteval bool validate() {
   []<std::size_t... Is>(std::index_sequence<Is...>) consteval {
