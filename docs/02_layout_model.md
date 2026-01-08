@@ -133,19 +133,12 @@ parent_subpacket_bit_offset + nested_field_bit_offset
 This is only a meaningful mapping if the subpacket starts on a byte boundary and the subpacket size is a whole number of bytes, as specified in the byte-granularity containment rule. If those conditions hold, the nested packet’s bytes are a contiguous byte slice of the parent packet’s bytes.
 
 Validated by tests/layout/subpacket_offsets_golden.cpp.
+## 10. Layout validation is enforced at packet formation time
 
-## 10. Layout correctness is not fully “self-validating” today
+`mad::packet` performs structural validation in a `consteval` context and rejects invalid layouts via `static_assert` during type formation.
 
-`mad::packet` contains a `validate()` function and a `static_assert(validate())`, but the current `validate()` body does not actually inspect field types and does not enforce important layout preconditions such as byte alignment of bytes/subpacket fields or byte-multiple sizing of subpackets.
+The validation enforces that bytes/subpacket fields must start on a byte boundary (`bit_offset % 8 == 0`), subpacket fields require `SubPacket::total_bits % 8 == 0` (whole-byte sized) and non-native-endian integer fields must be byte-aligned and 8/16/32/64 bits
 
-Today, correctness relies on two mechanisms.
+These checks intentionally fire even if a field is never accessed, preventing “latent invalid layout” types from existing.
 
-First, many illegal constructions are rejected by local `static_assert`s that occur when an access path is instantiated. For example, attempting to assign an explicit endianness tag to a bitfield integer is rejected when the field is accessed.
-
-Second, some correctness conditions are enforced only by `MAD_ASSERT` checks in the “safe construction” helpers (buffer size checks, base address alignment checks for certain MMIO constructors). If assertions are compiled out, those checks disappear.
-
-The contract implication is that “a packet type exists” does not mean “the packet type is structurally valid for every operation you might attempt”. You must still satisfy the stated layout preconditions, especially for byte-addressed fields and subpacket sizing.
-
-This document treats those preconditions as part of the layout contract even when the header does not currently enforce them with a `static_assert`, because otherwise the library fails by silent memory corruption, which is the worst possible failure mode for protocol/layout code.
-
-Validated by tests/layout/require_byte_alignment_for_bytes_and_subpacket.cpp and tests/endian/reject_non_scalar_endian_tag_compile_fail.cpp and tests/bounds/make_view_asserts.cpp.
+Runtime preconditions still exist for view construction (e.g., backing buffer size checks in `make_view`), and those remain separate from layout validation.
