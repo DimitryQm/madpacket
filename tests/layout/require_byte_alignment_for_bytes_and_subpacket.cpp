@@ -12,7 +12,6 @@
 //   byte = (bit_offset >> 3) only; intra-byte shifts are ignored.
 //   Therefore they must begin on a byte boundary (bit_offset % 8 == 0).
 //
-// The library does not currently enforce this as a compile-time error.
 // This test does two things:
 //   (1) Validates correct behavior for byte-aligned bytes/subpacket fields.
 //   (2) Demonstrates the *current* observable behavior for misaligned usage
