@@ -220,7 +220,7 @@ Padding cannot be accessed through `get<Name>()` or `set<Name>(...)` because pad
 
 Padding has no endianness and no view-level operations.
 
-Validated by tests/layout/packing_offsets_golden.cpp and tests/names/name_not_found_compile_fail.cpp.
+Validated by tests/layout/packing_offsets_golden.cpp and tests/names/name_not_found_compile_fail.cpp and tests/api/reject_get_set_on_pad_compile_fail.cpp
 
 
 ## 6. Subpacket fields (`mad::subpacket_field` and alias `mad::subpacket`)
