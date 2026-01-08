@@ -4,8 +4,6 @@ This document specifies the operational behavior of madpacket’s volatile MMIO 
 
 The goal here is not to repeat the entire project’s “semantic contract”. Those are already defined at a higher level. The goal here is to describe what changes when the backing storage is a volatile MMIO region: what kinds of volatile accesses the library emits, what width and alignment constraints it can enforce, when it performs read-modify-write sequences, where barriers are placed, and what “forbidden width” means in practice.
 
-This file is intentionally longer than the other docs because MMIO correctness has a particular failure mode: if the docs do not pin claims to tests, readers assume the implementation is doing “whatever the compiler feels like” and stop trusting it. Every section therefore ends with an explicit “Validated by …” line that points at the tests whose intent is to prevent regression in that behavior.
-
 Validated by tests/mmio/basic_scalar_endian.cpp, tests/mmio/barrier_placement.cpp, tests/mmio/bitfield_one_word_rmw.cpp, tests/mmio/bitfield_bus_word_le_stream.cpp, tests/mmio/bitfield_fallback_byte_window.cpp, tests/mmio_xview/native_exact_uses_scalar_width.cpp, tests/mmio_xview/non_native_path_uses_bus_words.cpp, tests/mmio_xview/bitfield_one_word_is_bus_rmw.cpp, tests/mmio_xview/bitfield_fallback_byte_window.cpp, tests/mmio_xview/barrier_placement.cpp, tests/mmio_xview/align_unchecked_no_check.cpp, tests/mmio_xview/align_assert_checks.cpp, tests/mmio_xview/align_trap_traps.cpp, tests/mmio_xview/align_assume_is_ub_contract.cpp, tests/mmio_xview/static_validate_enforce_bus_basealign.cpp, tests/mmio_xview/strict_mmio_fallback_behavior.cpp, and tests/mmio_xview/hardwidth_rejects_strict_mode_compile_fail.cpp.
 
 
