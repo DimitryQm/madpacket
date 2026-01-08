@@ -496,18 +496,37 @@ namespace mad {
       return sz;
     }();
 
-    // bounds validation: every field fits within total_bytes (by construction), but also
-    // bit-window reads never touch beyond end for int_fields.
-    static consteval bool validate() {
-      // Validate integer fields bit windows fit for their reads (need_bytes <= remaining bytes).
-      constexpr std::size_t n = field_count;
-      for (std::size_t i = 0; i < n; ++i) {
-        // We can't directly inspect type at runtime in consteval loop, so rely on byte-window
-        // checks in get/set which are compile-time instantiations.
-      }
-      return true;
+// bounds validation: ...
+template <std::size_t I>
+static consteval void validate_one() {
+  using F = std::tuple_element_t<I, std::tuple<Fields...>>;
+  constexpr std::size_t off = offsets_bits[I];
+
+  // bytes/subpacket address by (bit_off >> 3) => MUST be byte-aligned
+  if constexpr (F::kind == field_kind::bytes || F::kind == field_kind::subpacket) {
+    static_assert((off % 8u) == 0,
+      "bytes/subpacket fields must start on a byte boundary (bit_offset % 8 == 0)");
+  }
+
+  // Optional but recommended: catch invalid endian usage even if field is never accessed
+  if constexpr (F::kind == field_kind::int_bits) {
+    if constexpr (!detail::is_native_endian<typename F::endian>) {
+      static_assert((off % 8u) == 0,
+        "non-native-endian integer fields must be byte-aligned");
+      static_assert(F::bits == 8 || F::bits == 16 || F::bits == 32 || F::bits == 64,
+        "non-native-endian integer fields must be 8/16/32/64 bits");
     }
-    static_assert(validate());
+  }
+}
+
+static consteval bool validate() {
+  []<std::size_t... Is>(std::index_sequence<Is...>) consteval {
+    (validate_one<Is>(), ...);
+  }(std::make_index_sequence<field_count>{});
+  return true;
+}
+static_assert(validate());
+
 
     template <std::size_t I>
     using field_t = std::tuple_element_t<I, std::tuple<Fields...>>;
