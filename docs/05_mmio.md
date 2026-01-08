@@ -1,8 +1,8 @@
 # MMIO
 
-This document specifies the operational behavior of madpacket’s volatile MMIO access layer. It is written against the single-header implementation in `madpacket.hpp`.
+This document specifies the operational behavior of madpacket’s volatile MMIO access layer.
 
-The goal here is not to repeat the entire project’s “semantic contract” (bit numbering, layout rules, endian legality, name lookup rules, and so on). Those are already defined at a higher level. The goal here is to describe what changes when the backing storage is a volatile MMIO region: what kinds of volatile accesses the library emits, what width and alignment constraints it can enforce, when it performs read-modify-write sequences, where barriers are placed, and what “forbidden width” means in practice.
+The goal here is not to repeat the entire project’s “semantic contract”. Those are already defined at a higher level. The goal here is to describe what changes when the backing storage is a volatile MMIO region: what kinds of volatile accesses the library emits, what width and alignment constraints it can enforce, when it performs read-modify-write sequences, where barriers are placed, and what “forbidden width” means in practice.
 
 This file is intentionally longer than the other docs because MMIO correctness has a particular failure mode: if the docs do not pin claims to tests, readers assume the implementation is doing “whatever the compiler feels like” and stop trusting it. Every section therefore ends with an explicit “Validated by …” line that points at the tests whose intent is to prevent regression in that behavior.
 
