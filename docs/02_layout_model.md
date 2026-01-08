@@ -1,144 +1,272 @@
+````markdown
 # Layout Model
 
-This document defines how madpacket computes field offsets and sizes, what “total size” means, and what layout invariants must hold for the implementation to be correct.
+This document defines the layout rules of `mad::packet<Fields...>`: how field bit offsets are computed, what it means for a packet to have a given “total size”, how nested packets (subpackets) compose their offsets, and which structural invariants are required for the implementation to be correct.
 
-This document does not restate bit numbering, endianness, truncation semantics, or volatile access ordering. Those are specified in docs/01_semantics_contract.md.
+This document is intentionally narrow. It does not restate bit numbering within bytes, endianness semantics, truncation and sign/zero extension rules, or volatile ordering. Those are specified in `docs/01_semantics_contract.md`. This document is about the compile-time geometry of bits and bytes.
+
+When this document says that something “must” be true, it is describing an invariant of the model. In current madpacket, these invariants are enforced at packet formation time via `static_assert`, so an invalid layout is not a runtime concern; it is an ill-formed type.
 
 ## 1. What a layout is
 
-A layout is the compile-time result of instantiating `mad::packet<Fields...>`.
+A “layout” is the compile-time result of instantiating `mad::packet<Fields...>`.
 
-The only “layout inputs” are the field descriptor types in the template parameter pack. There is no runtime schema, no reflection-based discovery, and no dynamic size negotiation. Offsets, sizes, and total size are all compile-time constants derived from `Fields...`.
+The template parameter pack `Fields...` is the entire schema. There is no runtime schema object, no dynamic size negotiation, and no reflection-driven discovery. The offsets, sizes, and totals that describe the layout are compile-time constants derived solely from the declared field descriptors.
 
-The packet type is an immutable description of a bit-level structure. Views (`mad::view`, `mad::cview`, `mad::reg::view`, `mad::reg::xview`, and their const variants) are the runtime bindings that apply that description to some base address.
+A `mad::packet` is therefore an immutable, purely type-level description of a bit-level structure. Runtime objects do not “contain” fields. Runtime objects are views that bind a packet description to a concrete address range. The layout rules in this document explain how the packet description maps field names to bit positions; the view APIs then apply that mapping to a particular buffer or register.
 
-Validated by tests/layout/packing_offsets_golden.cpp.
+In particular, a layout is not a C++ ABI struct. There is no compiler-inserted padding, no platform ABI alignment, and no dependence on the host compiler’s layout rules. The layout exists entirely in the madpacket domain: it is the concatenation of declared field bit widths.
 
-## 2. Field kinds and their declared sizes
+The “golden” tests that validate the model are `tests/layout/packing_offsets_golden.cpp` for basic packing behavior and `tests/layout/subpacket_offsets_golden.cpp` for nested subpacket offset composition.
 
-madpacket has four field kinds.
+## 2. Field descriptors and declared bit sizes
 
-An integer field is `mad::int_field<Name, Bits, Signed, EndianTag>`. Its declared size is exactly `Bits` bits, where `Bits` is in 1..64. Integer fields are bit-addressable.
+Every field descriptor in `Fields...` contributes an exact number of bits to the packing stream. The layout model does not create padding implicitly, does not round field sizes, and does not align fields unless you explicitly model alignment with padding fields.
 
-A bytes field is `mad::bytes_field<Name, N>`. Its declared size is exactly `N * 8` bits. Bytes fields are byte-addressable (they return a pointer and size), and they are not addressable at bit granularity by the public API.
+The library supports addressable integer fields, addressable byte ranges, explicit padding, and addressable subpackets.
 
-A padding field is `mad::pad_bits<Bits>` or `mad::pad_bytes<N>`. Its declared size is exactly the padding amount. Padding fields are not addressable and do not produce a value.
+An integer field is a named, fixed-width integer region that is bit-addressable. At the type level it is represented by an integer field descriptor (internally an `int_field`-style descriptor) and it declares a bit width `Bits` in the range 1 through 64 inclusive. The declared size of the field is exactly `Bits` bits. Integer fields are the only fields that madpacket allows to start and end at arbitrary bit offsets, including offsets that are not divisible by 8 and widths that straddle bytes. This is the mechanism used to model wire-format bitfields and irregular register layouts.
 
-A subpacket field is `mad::subpacket_field<Packet, Name>`. Its declared size is exactly `Packet::total_bits`. Subpacket fields are byte-addressable in the sense that a nested view is formed by adding a whole-byte offset to the parent base pointer.
+A bytes field is a named, fixed-length contiguous byte region. At the type level it is represented by a bytes field descriptor (internally a `bytes_field`-style descriptor) parameterized by a byte count `N`. The declared size of the field is exactly `N * 8` bits. The crucial distinction is not the size, which is still expressed in bits for layout computation; the distinction is how the runtime API addresses it. A bytes field is returned as a pointer and a size in bytes, not as a bit-addressable region.
 
-Nothing in the implementation inserts or synthesizes padding. Every bit in the layout is accounted for by one of the explicit fields, including explicit pad fields.
+A padding field is an unnamed, non-addressable region that contributes bits to the packing stream but does not produce an addressable field. Padding exists only because you wrote it. If you need a field to begin at a particular bit or byte boundary, you model that boundary explicitly by inserting `pad_bits<...>` or `pad_bytes<...>` in the field list. The declared size of a padding field is exactly the amount of padding you specify.
 
-Validated by tests/layout/packing_offsets_golden.cpp.
+A subpacket field is a named field whose payload is itself another `mad::packet` type. At the type level it is represented by a subpacket descriptor (internally a `subpacket_field`-style descriptor) holding a packet type `SubPacket` and a name. The declared size of the subpacket field is exactly `SubPacket::total_bits`. The meaning of “subpacket” is not “inline struct” in the C++ sense; it is “a nested layout that is addressed via a nested view whose base pointer is computed from the parent buffer”.
 
-## 3. Packing rule: contiguous concatenation in declaration order
+The fact that sizes are expressed in bits is fundamental. Even for bytes and subpackets, where runtime access is byte-oriented, the layout model first computes their bit position and their bit extent. Byte-oriented access is then derived from those bit facts, and that derivation imposes strict invariants, described later, that madpacket enforces.
 
-The packing model is “concatenate fields in order, bit-by-bit”.
+## 3. Packing rule: concatenation in declaration order
 
-For a packet `P = mad::packet<F0, F1, F2, ...>`, the bit offset of field `Fi` is defined as the sum of `Fj::bits` for all `j < i`. The first field’s bit offset is 0.
+The packing model is “concatenate fields in declaration order, bit by bit”.
 
-There is no implicit alignment. A field may start at any bit offset, including offsets not divisible by 8, and including offsets that cause the field to straddle bytes. This is a deliberate design point: the library’s primary purpose is to model wire formats and register layouts that are not naturally aligned.
+Let `P` be `mad::packet<F0, F1, F2, ...>`. Define `bits(Fi)` as the declared number of bits contributed by field descriptor `Fi`. The bit offset of `Fi` is defined as the sum of the bit widths of all preceding fields:
 
-Because packing is purely by declared bit size, the layout is stable and transparent: there is no ABI, no compiler-dependent padding, and no “struct rules” involved.
+`offset_bits(F0) = 0`
 
-Validated by tests/layout/packing_offsets_golden.cpp.
+`offset_bits(Fi) = bits(F0) + bits(F1) + ... + bits(F(i-1))` for `i > 0`
 
-## 4. Total size: total_bits and total_bytes
+This is a pure prefix sum. There is no implicit alignment. If you place an integer bitfield after a 3-bit field, it begins at bit offset 3. If you place a padding field of 5 bits, the next field begins at the sum of those 5 bits plus whatever came before. If you want byte alignment, you model it by adding explicit padding such that the next field’s offset becomes divisible by 8.
 
-`Packet::total_bits` is the sum of all `Fields::bits`.
+Because the rule is this simple, the layout is transparent and stable. Two different compilers cannot “disagree” about it, because it is not delegated to the compiler. It is computed directly by `mad::packet` as a `consteval` result.
 
-`Packet::total_bytes` is computed as `(total_bits + 7) >> 3`, which is the ceiling of total_bits / 8.
+The golden tests in `tests/layout/packing_offsets_golden.cpp` are written to ensure that offsets computed this way match the byte patterns produced by `get` and `set` for representative cases, including fields that straddle byte boundaries.
 
-This implies that if `total_bits` is not a multiple of 8, the final byte of the backing buffer contains some high-order bits that are not part of any field. Those bits exist only because the buffer is byte-addressed and must round up to a whole number of bytes.
+A minimal example that illustrates the rule at compile time looks like this:
 
-The layout contract is that no field ever claims those unused bits, because by construction there is no field whose bit range extends beyond `total_bits`. Reads and writes may touch the containing bytes of a field (in particular, read-modify-write updates for bitfields preserve neighboring bits within the touched bytes), but the field’s logical value is defined only by its declared bit range.
+```cpp
+using P = mad::packet<
+  mad::ubits<3, "a">,
+  mad::ubits<5, "b">,
+  mad::u8<"c">
+>;
 
-This is the reason the minimum safe backing buffer size is `Packet::total_bytes`. If you supply fewer bytes, the implementation will perform out-of-bounds loads and stores for fields near the end of the layout.
+static_assert(P::offsets_bits[0] == 0);
+static_assert(P::offsets_bits[1] == 3);
+static_assert(P::offsets_bits[2] == 8);
 
-Validated by tests/layout/packing_offsets_golden.cpp and tests/bitfields/window_minimality.cpp and tests/bounds/make_view_asserts.cpp.
+static_assert(P::sizes_bits[0] == 3);
+static_assert(P::sizes_bits[1] == 5);
+static_assert(P::sizes_bits[2] == 8);
+````
 
-## 5. The compile-time offset tables exposed by mad::packet
+This example is not “special casing” intra-byte fields. It is exactly the same rule applied uniformly: `b` begins after the 3 bits of `a`, and `c` begins after the 3+5 bits that form the first byte.
 
-`mad::packet` exposes two compile-time arrays, both indexed by field index in the same order as `Fields...`.
+## 4. Total size: `total_bits` and `total_bytes`
 
-`Packet::offsets_bits[i]` is the bit offset of field i.
+`Packet::total_bits` is the sum of declared bit sizes of all field descriptors in the packet:
 
-`Packet::sizes_bits[i]` is the bit size of field i, equal to `field_t<i>::bits`.
+`total_bits = bits(F0) + bits(F1) + ... + bits(Fn-1)`
 
-These arrays are computed in a `consteval` context using a fold expression and stored as `std::array<std::size_t, field_count>`.
+`Packet::total_bytes` is the number of bytes required to store `total_bits` bits in a byte-addressed buffer, computed as the ceiling of `total_bits / 8`:
 
-The contract is that these arrays reflect the packing rule exactly and are not “advisory”. All access paths use these offsets and sizes (directly or indirectly) to determine which bytes to touch.
+`total_bytes = (total_bits + 7) >> 3`
 
-Validated by tests/layout/packing_offsets_golden.cpp.
+This rounding is not a layout decision; it is an unavoidable consequence of the fact that the backing memory is byte-addressed. If your layout contains 1 bit, you still need at least 1 byte of storage to hold it. If your layout contains 9 bits, you need 2 bytes.
 
-## 6. Name lookup and uniqueness are part of the layout model
+This rounding introduces the concept of trailing unused bits when `total_bits` is not divisible by 8. Those bits exist in the last byte of the buffer but are not part of any declared field, because no declared field’s bit range extends beyond `total_bits`. In the layout model, those bits are outside the packet. They are not addressable by name, and no layout computation assigns them to a field.
 
-Field names are `mad::fixed_string` non-type template parameters.
+This does not mean they are never touched at the machine level. Bitfield updates are typically implemented as read-modify-write on a minimal containing byte window, and a field near the end of the packet may require touching the final byte that also contains trailing unused bits. The semantics contract, as defined in `docs/01_semantics_contract.md`, is that operations preserve bits outside the logical range of the field within any bytes that are touched. That preservation property is what prevents a bitfield write from “bleeding” into neighboring fields or into trailing unused bits.
 
-Within a single `mad::packet<...>`, all named fields must have unique names. Duplicate names are ill-formed and rejected at compile time.
+The minimum safe backing buffer size for a view is `Packet::total_bytes`. If you supply fewer bytes, fields near the end of the packet will necessarily require out-of-bounds loads or stores when the implementation touches the containing bytes. This is not a negotiable property of the model; it follows directly from the definition of `total_bytes` as the ceiling of the total bit size.
 
-The packet provides `Packet::index_of<Name>` and `Packet::has<Name>` as compile-time queries. Access APIs (`get<Name>`, `set<Name>`) are compile-time name lookups; requesting a name not present in the packet is ill-formed and rejected at compile time.
+Runtime validation of buffer size belongs to view construction and is validated by tests such as `tests/bounds/make_view_asserts.cpp`. The definition of the totals belongs here, because view checks must be derived from these totals, and because subpackets and bytes fields also rely on the relationship between bit totals and byte totals.
 
-These are layout-level constraints because they affect whether a particular layout description can be formed and addressed.
+## 5. The compile-time offset and size tables exposed by `mad::packet`
 
-Validated by tests/names/unique_names_required_compile_fail.cpp and tests/names/name_not_found_compile_fail.cpp.
+A `mad::packet` exposes two compile-time arrays that represent the layout in an indexable, non-name-based form.
 
-## 7. Byte-addressed field types require byte-granularity containment
+`Packet::offsets_bits[i]` is the bit offset of the i-th field in the template parameter pack, computed by the packing rule described earlier.
 
-The implementation has two categories of access.
+`Packet::sizes_bits[i]` is the declared size in bits of the i-th field in the template parameter pack, equal to that field descriptor’s `bits` constant.
 
-Bit-addressed access is used for integer bitfields. It can begin and end at arbitrary bit offsets.
+These arrays are indexed in the exact declaration order of `Fields...`. The i-th element corresponds to the i-th descriptor in `Fields...`. There is no reordering, grouping, or canonicalization. A packet is not allowed to “optimize” its internal ordering, because that would break the foundational guarantee that the declaration order is the layout order.
 
-Byte-addressed access is used for bytes fields and subpacket fields. The implementation forms a pointer by computing `byte_offset = bit_offset >> 3` and adding it to the base pointer. It does not incorporate any intra-byte shift.
+The packet also exposes `Packet::field_count`, which is the number of descriptors in `Fields...`. The arrays are `std::array<std::size_t, field_count>`, and they exist as compile-time constants so they can be consumed by metaprogramming code, by tests, and by the library’s own internal access machinery.
 
-Therefore, the layout contract requires byte-granularity containment for bytes fields and subpacket fields.
+The important point is that these arrays are not “advisory metadata”. They are part of the layout’s public contract. All access paths, whether name-based or index-based internally, derive the touched bytes and bit positions from these offsets and sizes. The golden tests assert specific values in these arrays for representative layouts precisely because they are the ground truth of the model.
 
-A bytes field must start on a byte boundary. Concretely, its bit offset must be divisible by 8. If it does not, `bit_offset >> 3` points to the wrong byte, and the returned bytes reference does not correspond to the declared bits of the field. The library does not currently reject this construction at compile time, so violating this rule is a layout-level undefined behavior that will manifest as silent corruption.
+## 6. Names, lookup, and uniqueness as layout constraints
 
-A subpacket field must start on a byte boundary for the same reason: the nested view is created by adding a whole-byte offset.
+Field naming is part of layout formation, not merely part of the runtime API. A packet must be name-addressable in a single, unambiguous way.
 
-A subpacket field must also be a whole number of bytes in size. Concretely, the nested packet type must satisfy `SubPacket::total_bits % 8 == 0`.
+Field names are compile-time strings, represented as `mad::fixed_string` non-type template parameters. A packet’s fields are therefore identified by compile-time values, not by runtime strings. This is what makes `get<"name">()` and `set<"name">()` compile-time selection operations rather than runtime dispatch.
 
-This size requirement is not aesthetic; it is required for correctness. If a subpacket’s total bits are not a multiple of 8, then `SubPacket::total_bytes` rounds up and the nested view’s last byte overlaps bits that belong to the parent layout after the subpacket field. Any nested access that touches that last byte (including read-modify-write within the nested packet) can read or write bits outside the subpacket region and thereby alias the parent’s following fields.
+Within a single `mad::packet<...>`, all named fields must have unique names. If two descriptors introduce the same name, the packet type is ill-formed and is rejected at compile time. The reason this is a layout rule rather than an API nicety is that name collisions would make the packet’s address space ambiguous. A layout description that cannot be addressed unambiguously is not a valid layout in the madpacket model.
 
-The library does not currently statically reject subpackets whose total_bits is not byte-multiple, so this rule is also a caller-enforced layout precondition. If you violate it, behavior is undefined at the library level even if it “seems to work” for a subset of accesses.
+The packet provides compile-time name queries such as `Packet::has<Name>` and `Packet::index_of<Name>`. These queries are part of the layout’s compile-time interface. They are used by the view APIs to reject invalid field names at compile time, and they are used by tests to verify name lookup behavior.
 
-Validated by tests/layout/require_byte_alignment_for_bytes_and_subpacket.cpp.
+The compile-fail tests under `tests/names/` validate both uniqueness enforcement and “name not found” rejection.
 
-## 8. Scalar-integer “fast path” eligibility is a layout property
+## 7. Byte-addressed fields and the byte-alignment invariants
 
-Some access paths treat certain integer fields as byte-aligned scalars and operate on whole bytes, while other integer fields are treated as bitfields and operate on a minimal byte window with bit extraction or insertion.
+The layout model allows fields to begin at arbitrary bit offsets in general, but byte-addressed field kinds impose stricter requirements. These requirements exist because of how the runtime API constructs pointers.
 
-Whether a field is treated as a byte-aligned scalar is determined purely by layout facts: its bit offset and its declared bit width.
+For a bytes field or a subpacket field, the runtime implementation forms a byte pointer by computing a byte offset from the field’s bit offset using `byte_offset = bit_offset >> 3`, and then adding that to the base pointer. This computation discards any intra-byte bit position. There is no intra-byte shifting step for byte-addressed access, because the API of a bytes field is not “a bit slice”; it is “a pointer to bytes”.
 
-A field is a byte-aligned scalar integer field if and only if its bit offset is divisible by 8 and its width is exactly 8, 16, 32, or 64 bits.
+As a consequence, a bytes field must start on a byte boundary. Concretely, its bit offset must be divisible by 8. If it did not, then `bit_offset >> 3` would point at the byte containing the field’s first bits rather than the byte that begins the field, and the returned pointer would not describe the declared field region. That would be a structural mismatch between the type-level layout and the runtime address returned by the API.
 
-All other integer fields are treated as bitfields, including any integer field whose width is not in {8,16,32,64}, even if it starts on a byte boundary.
+A subpacket field must also start on a byte boundary for the same reason. The nested view base pointer is computed by adding `bit_offset >> 3` bytes to the parent base. If the subpacket field began at a non-byte boundary, the nested view would begin at the wrong address, and every nested field access would be offset incorrectly.
 
-This classification matters structurally because byte-aligned scalar access touches exactly the field’s bytes, while bitfield access touches a minimal containing byte window and performs read-modify-write within that window.
+In madpacket as it exists now, these rules are enforced at packet formation time. Attempting to declare a bytes field or subpacket field at a misaligned bit offset is rejected by `static_assert` during the instantiation of the packet type.
 
-The layout contract is not “you will always get the fast path”. The layout contract is that the bytes and bits touched by the library are determined by this classification and by the bit numbering rules in docs/01_semantics_contract.md.
+A concrete example that is structurally invalid is this:
 
-Validated by tests/int/get_unsigned_zero_extend.cpp and tests/bitfields/window_minimality.cpp and tests/endian/reject_non_scalar_endian_tag_compile_fail.cpp.
+```cpp
+using Bad = mad::packet<
+  mad::ubits<1, "flag">,
+  mad::bytes<2, "payload"> // invalid: payload starts at bit offset 1
+>;
+```
 
-## 9. Nested layouts: offset composition for subpackets
+This fails because the bytes field’s bit offset is 1, which is not divisible by 8. The library rejects this layout because there is no correct way to implement `get<"payload">()` as a byte pointer without violating the declared bit geometry.
 
-A subpacket field occupies exactly `SubPacket::total_bits` bits in the parent packet’s packing stream.
+The same alignment rule applies to subpackets:
 
-The nested view returned by `get<SubName>()` is formed by taking the parent base pointer and adding the subpacket field’s byte offset. Inside the nested view, all offsets are computed relative to that nested base pointer, using the nested packet’s own `offsets_bits`.
+```cpp
+using Inner = mad::packet<
+  mad::u8<"x">
+>;
 
-Structurally, this is “offset composition”: the absolute bit position of a nested field inside the parent buffer is:
+using Bad = mad::packet<
+  mad::ubits<3, "hdr">,
+  mad::subpacket<Inner, "inner"> // invalid: inner starts at bit offset 3
+>;
+```
 
-parent_subpacket_bit_offset + nested_field_bit_offset
+This fails for the same reason: the nested view would necessarily compute a base pointer that cannot represent an offset of 3 bits.
 
-This is only a meaningful mapping if the subpacket starts on a byte boundary and the subpacket size is a whole number of bytes, as specified in the byte-granularity containment rule. If those conditions hold, the nested packet’s bytes are a contiguous byte slice of the parent packet’s bytes.
+These rules are validated by `tests/layout/require_byte_alignment_for_bytes_and_subpacket.cpp` and are further exercised by the golden subpacket offset test `tests/layout/subpacket_offsets_golden.cpp`, which asserts both compile-time offsets and runtime pointer relationships.
 
-Validated by tests/layout/subpacket_offsets_golden.cpp.
-## 10. Layout validation is enforced at packet formation time
+## 8. Subpacket size must be whole-byte sized
+
+Subpackets impose an additional invariant beyond starting alignment: the subpacket’s total size must be a whole number of bytes.
+
+The declared size of a subpacket field is `SubPacket::total_bits`. The nested view is constructed over `SubPacket::total_bytes` bytes, because views are bound to byte-addressed memory ranges. If `SubPacket::total_bits` is not divisible by 8, then `SubPacket::total_bytes` is a rounded-up ceiling, and the nested view necessarily includes a last byte that contains bits that lie beyond the subpacket’s declared bit extent.
+
+That last byte is not harmless. A nested packet is allowed to contain bitfields whose updates are implemented as read-modify-write on the containing byte window. If the nested view’s last byte overlaps with bits that, in the parent layout, belong to fields after the subpacket, then a nested update that touches that last byte can read or write bits outside the subpacket region. At that point, the nested view is not a faithful view of the subpacket field; it is an aliasing view that overlaps adjacent parent fields. The layout model does not allow such overlap.
+
+For that reason, a subpacket field requires `SubPacket::total_bits % 8 == 0`. This is not a performance preference. It is a correctness condition that makes the byte range of the nested view match exactly the subpacket’s region within the parent’s byte buffer.
+
+This requirement is now enforced at packet formation time. A subpacket whose `total_bits` is not divisible by 8 cannot be used as a `subpacket<...>` field, because there is no safe definition of “the nested view’s backing byte range” that both includes all subpacket bits and excludes all bits outside the subpacket.
+
+The golden test `tests/layout/subpacket_offsets_golden.cpp` is specifically designed to validate subpacket composition under the conditions that make it meaningful: the subpacket begins on a byte boundary and occupies a whole number of bytes, so the nested view’s base pointer and the nested field offsets compose into correct absolute bit positions.
+
+## 9. Integer fields, scalar eligibility, and non-native-endian restrictions
+
+Integer fields are always declared in bits, but the implementation distinguishes two access categories: scalar-byte access and bitfield access. This distinction matters for both correctness constraints and performance characteristics, and it is purely a function of the layout.
+
+An integer field is treated as a byte-aligned scalar integer field if and only if its bit offset is divisible by 8 and its bit width is exactly 8, 16, 32, or 64. In that case, the field occupies an integral number of bytes, begins at a byte boundary, and can be implemented as operations on those bytes without requiring bit extraction and insertion. This is the category that supports explicit endianness conversions on non-native-endian representations, because endianness in madpacket is defined over byte sequences.
+
+All other integer fields are treated as bitfields. This includes integer fields whose width is not one of 8, 16, 32, or 64, even if the field begins at a byte boundary. It also includes 8/16/32/64-bit fields that begin at a non-byte boundary. Bitfield access operates on a minimal containing byte window and uses the bit numbering rules defined in `docs/01_semantics_contract.md` to extract or insert the field’s logical value.
+
+Non-native-endian integer fields impose stricter requirements, and these are now enforced structurally at packet formation time. If an integer field is declared with a non-native endianness tag, then it must be byte-aligned, and its width must be exactly 8, 16, 32, or 64. The reason is not arbitrary. Endianness conversion is defined on whole bytes, and the implementation’s non-native-endian path necessarily treats the field as a sequence of bytes. If the field is not byte-aligned or not a whole number of bytes, there is no coherent definition of “the field’s byte order” that does not partially include neighboring bits.
+
+A representative invalid declaration is this:
+
+```cpp
+using Bad = mad::packet<
+  mad::ubits<3, "a">,
+  mad::u16<"v", mad::endian::big> // invalid: v starts at bit offset 3
+>;
+```
+
+This fails because a non-native-endian integer must start on a byte boundary. The model requires that `bit_offset % 8 == 0` for such fields, and the library enforces it.
+
+Another invalid declaration is this:
+
+```cpp
+using Bad = mad::packet<
+  mad::uint_bits<12, "v", mad::endian::big> // invalid: 12-bit non-native-endian
+>;
+```
+
+This fails because a non-native-endian integer must be one of 8, 16, 32, or 64 bits. Endianness conversion in madpacket is defined for byte sequences that correspond to standard integer widths; applying it to a 12-bit quantity would require defining how partial-byte fields are byte-ordered, which would contradict the core bitfield model and would create ambiguous behavior at byte boundaries.
+
+These restrictions are part of the layout model because they determine whether a packet type can exist. They are not “usage errors” that only show up when you call `get` or `set`; they are rejected when the packet is formed, even if the field would never be accessed.
+
+Compile-fail tests under `tests/endian/` validate the rejection of invalid non-native-endian uses, and the validation logic is part of the packet’s formation-time layout validation described later.
+
+## 10. Nested layouts: offset composition for subpackets
+
+A subpacket field occupies exactly `SubPacket::total_bits` bits in the parent packet’s packing stream, at the bit offset computed by the parent’s packing rule.
+
+When you access a subpacket field by name, the runtime returns a nested view whose base pointer is computed by taking the parent view’s base pointer and adding the subpacket field’s byte offset, which is `parent_subpacket_bit_offset >> 3`.
+
+Inside the nested view, offsets are computed exactly as they would be for any other packet: by the nested packet’s own packing rule, producing nested offsets relative to the nested base pointer.
+
+The structural meaning of nesting is therefore offset composition. If `parent_off` is the parent subpacket field’s bit offset and `nested_off` is a nested field’s bit offset within the subpacket packet, then the nested field’s absolute bit position in the parent backing buffer is `parent_off + nested_off`.
+
+This equation is not an “implementation detail”. It is what it means for a subpacket to be a nested layout rather than a separately stored object. It is also the reason the alignment and whole-byte-size invariants exist: the nested view is created by a pure byte pointer addition, and nested access is defined by composing bit offsets atop that byte pointer. Without byte alignment and whole-byte subpacket size, the composed mapping would not correspond to a contiguous byte slice of the parent buffer and nested access would alias neighboring bits.
+
+The golden test `tests/layout/subpacket_offsets_golden.cpp` asserts both compile-time offset tables and runtime pointer equality for single-level and two-level nesting. The purpose of that test is to ensure that the model’s offset composition statement matches the actual behavior of nested views.
+
+A representative two-level nesting shape, matching the golden test, looks like this:
+
+```cpp
+using Inner = mad::packet<
+  mad::ubits<4, "x">,
+  mad::ubits<4, "y">,
+  mad::u8<"z">
+>;
+
+using Sub = mad::packet<
+  mad::u8<"pfx">,
+  mad::subpacket<Inner, "inner">,
+  mad::u8<"sfx">
+>;
+
+using P = mad::packet<
+  mad::u8<"pre">,
+  mad::subpacket<Sub, "sub">,
+  mad::u8<"post">
+>;
+```
+
+In this structure, the nested field `"x"` has an absolute bit position equal to the sum of `"sub"`’s offset within `P`, plus `"inner"`’s offset within `Sub`, plus `"x"`’s offset within `Inner`. The test asserts that this composition is reflected both in offsets tables and in actual byte patterns produced by writes.
+
+## 11. Layout validation is enforced at packet formation time
 
 `mad::packet` performs structural validation in a `consteval` context and rejects invalid layouts via `static_assert` during type formation.
 
-The validation enforces that bytes/subpacket fields must start on a byte boundary (`bit_offset % 8 == 0`), subpacket fields require `SubPacket::total_bits % 8 == 0` (whole-byte sized) and non-native-endian integer fields must be byte-aligned and 8/16/32/64 bits
+This validation is part of the layout model because it defines what counts as a “valid layout”. A type that violates these rules is not a valid `mad::packet` in the model, and it is not allowed to exist as a well-formed type.
 
-These checks intentionally fire even if a field is never accessed, preventing “latent invalid layout” types from existing.
+The validation enforces the byte-addressing invariants described earlier. Any bytes field must start on a byte boundary, meaning its computed bit offset must satisfy `bit_offset % 8 == 0`. Any subpacket field must start on a byte boundary for the same reason, and must additionally require that the nested packet’s `total_bits` is a multiple of 8 so that the nested view’s byte range does not overlap bits outside the subpacket region.
 
-Runtime preconditions still exist for view construction (e.g., backing buffer size checks in `make_view`), and those remain separate from layout validation.
+The validation also enforces the non-native-endian restrictions for integer fields. Any integer field declared with a non-native endianness tag must be byte-aligned and must have a bit width of exactly 8, 16, 32, or 64. This ensures that the endian conversion path is only instantiated for layouts where the field corresponds to a whole number of bytes with a well-defined byte order.
+
+These checks are intentionally unconditional with respect to usage. The packet is rejected even if you never call `get` or `set` for the offending field. This design choice prevents latent invalid layout types from existing in a codebase and later becoming reachable through refactors or template instantiations.
+
+The test `tests/layout/require_byte_alignment_for_bytes_and_subpacket.cpp` exists specifically to confirm that these invariants are enforced by the type system rather than by convention, and `tests/layout/subpacket_offsets_golden.cpp` exists to confirm that, once these invariants hold, nested pointer formation and offset composition behave exactly as the model states.
+
+## 12. Relationship to runtime view construction
+
+Layout validity is a compile-time property of the packet type. Runtime view validity is a property of binding that packet type to a particular backing memory range.
+
+A view constructor such as `make_view<P>(base, size_bytes)` has runtime preconditions that derive directly from layout facts. In particular, the caller must provide at least `P::total_bytes` bytes of accessible memory starting at `base`. If the provided range is smaller, the view cannot be correct, because some field accesses would require touching bytes beyond the end of the supplied range. The view layer asserts or otherwise defends these bounds as part of runtime safety.
+
+Those runtime checks are not layout rules; they are consequences of layout rules. The layout model defines what `total_bytes` means, defines which fields are byte-addressed and how they form pointers, and defines which bit windows an access may touch. The view layer then checks that the concrete buffer satisfies the minimum requirements implied by those definitions.
+
+Keeping these concerns separate is deliberate. The packet type answers “what is the structure”. The view answers “where is that structure stored”. This document specifies the former with enough precision that the latter can be implemented and reasoned about mechanically.
+
+```
+```
