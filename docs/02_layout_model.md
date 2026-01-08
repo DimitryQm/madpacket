@@ -1,4 +1,3 @@
-````markdown
 # Layout Model
 
 This document defines the layout rules of `mad::packet<Fields...>`: how field bit offsets are computed, what it means for a packet to have a given “total size”, how nested packets (subpackets) compose their offsets, and which structural invariants are required for the implementation to be correct.
@@ -268,5 +267,3 @@ Those runtime checks are not layout rules; they are consequences of layout rules
 
 Keeping these concerns separate is deliberate. The packet type answers “what is the structure”. The view answers “where is that structure stored”. This document specifies the former with enough precision that the latter can be implemented and reasoned about mechanically.
 
-```
-```
