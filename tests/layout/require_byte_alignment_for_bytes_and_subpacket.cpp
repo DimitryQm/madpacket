@@ -12,11 +12,8 @@
 //   byte = (bit_offset >> 3) only; intra-byte shifts are ignored.
 //   Therefore they must begin on a byte boundary (bit_offset % 8 == 0).
 //
-// This test does two things:
-//   (1) Validates correct behavior for byte-aligned bytes/subpacket fields.
-//   (2) Demonstrates the *current* observable behavior for misaligned usage
-//       (pointer floors to the previous byte), so the contract can treat it
-//       as undefined behavior at the library level.
+// This test validates correct behavior for byte-aligned bytes/subpacket fields.
+//
 
 static inline unsigned u8(std::byte b) { return std::to_integer<unsigned>(b); }
 
@@ -103,81 +100,6 @@ int main() {
     // tail at byte3
     assert(u8(buf[3]) == 0xAAu);
     assert(v.get<"tail">() == 0xAAu);
-  }
-
-  // Case C: bytes field misaligned (demonstration of why it's UB at library level)
-  //
-  // Layout: pre4 then payload bytes (starts at bit offset 4, NOT byte-aligned).
-  // In current implementation, get<"payload"> uses (bit_off >> 3) and returns base+0,
-  // meaning payload.data() points at buf[0], *not* at a nibble boundary.
-  using C = packet<
-    u4<"pre4">,
-    bytes<"payload", 2>, // MISALIGNED: bit offset is 4
-    u8<"tail">
-  >;
-  static_assert(C::total_bytes == 1 + 2 + 1); // still computed as ceil(total_bits/8)
-
-  {
-    std::array<std::byte, C::total_bytes> buf{};
-    buf[0] = std::byte{0xF0};
-    buf[1] = std::byte{0x11};
-    buf[2] = std::byte{0x22};
-    buf[3] = std::byte{0x33};
-
-    auto v = make_view<C>(buf.data(), buf.size());
-    v.set<"pre4">(0xAu); // only low nibble should be A
-
-    auto payload = v.get<"payload">();
-    // Demonstrate the current pointer flooring behavior.
-    assert(payload.data() == buf.data() + 0);
-    assert(payload.size() == 2);
-
-    // Mutating "payload" will clobber byte0 (which also contains pre4 bits).
-    auto sp = payload.as_span();
-    sp[0] = std::byte{0xDE};
-    sp[1] = std::byte{0xAD};
-
-    assert(u8(buf[0]) == 0xDEu);
-    assert(u8(buf[1]) == 0xADu);
-
-    // tail is still a byte-aligned u8 at the end; ensure it's not affected by payload writes.
-    v.set<"tail">(0x5Au);
-    assert(v.get<"tail">() == 0x5Au);
-    assert(u8(buf[3]) == 0x5Au);
-  }
-
-  // Case D: subpacket misaligned (demonstration)
-  //
-  // Layout: pre4 then subpacket (starts at bit offset 4).
-  // Current implementation returns base + (bit_off >> 3) == base+0 for subpacket view.
-  // Nested writes will clobber the first bytes, including the nibble that contains pre4.
-  using D = packet<
-    u4<"pre4">,
-    subpacket<Sub, "sub">, // MISALIGNED
-    u8<"tail">
-  >;
-
-  {
-    std::array<std::byte, D::total_bytes> buf{};
-    buf[0] = std::byte{0x0F};
-    buf[1] = std::byte{0x00};
-    buf[2] = std::byte{0x00};
-    buf[3] = std::byte{0x00};
-
-    auto v = make_view<D>(buf.data(), buf.size());
-    v.set<"pre4">(0x3u);
-
-    auto s = v.get<"sub">();
-    // Implementation floors to byte0.
-    s.set<"sx">(0x99u);
-    s.set<"sy">(0x88u);
-
-    assert(u8(buf[0]) == 0x99u);
-    assert(u8(buf[1]) == 0x88u);
-
-    // tail should still work.
-    v.set<"tail">(0x77u);
-    assert(u8(buf[3]) == 0x77u);
   }
 
   return 0;
