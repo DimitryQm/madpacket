@@ -91,7 +91,7 @@ The view then stores the base pointer and performs no further runtime checks on 
 
 The `BaseAlign` parameter is primarily used as an alignment bound for whether the implementation is allowed to attempt typed volatile accesses for scalar loads/stores. It is not, by itself, a bus-enforcement promise. A `view` can and will emit bytewise accesses in some paths even when `Bus` is wider, because the simple view’s job is correctness under C++ semantics, not hardware width enforcement.
 
-Validated by tests/bounds/make_view_asserts.cpp.
+Validated by tests/mmio/make_view_basealign_asserts.cpp.
 
 
 ## 6. `mad::reg::view`: byte-aligned scalar integer fields
