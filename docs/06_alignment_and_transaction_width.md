@@ -6,11 +6,6 @@ This document is about the *MMIO policy surface* for `mad::reg::xview` / `mad::r
 
 It defines, precisely, what alignment is enforced (and how), and how transaction width is selected (and how that interacts with capability masks, strict mode, and hardwidth).
 
-It intentionally does not restate bit numbering, endianness, truncation/sign-extension, or layout formation rules; those are specified in docs/01_semantics_contract.md and docs/02_layout_model.md, and the MMIO volatility/barrier/RMW model is specified in docs/05_mmio.md.
-
-It does not attempt to model specific peripheral behavior or vendor rules; it only states what *madpacket* will do and what it will not promise.
-
-It mentions `mad::reg::view` / `mad::reg::cview` only when needed to contrast “fixed behavior” versus “policy-driven behavior”.
 
 
 ## 1) Definitions
